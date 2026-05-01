@@ -1,0 +1,365 @@
+/**
+ * TalentFlow CRM — Backend
+ * Node.js 22+ (built-in SQLite, no npm dependencies)
+ * Run: node server.js
+ */
+'use strict';
+
+const http   = require('node:http');
+const fs     = require('node:fs');
+const path   = require('node:path');
+const url    = require('node:url');
+const { DatabaseSync } = require('node:sqlite');
+
+const PORT      = process.env.PORT || 3000;
+const DB_FILE   = path.join(__dirname, 'crm.db');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// ─────────────────────────────────────────────
+// DATABASE
+// ─────────────────────────────────────────────
+const db = new DatabaseSync(DB_FILE);
+
+db.exec(`
+  PRAGMA journal_mode=WAL;
+
+  CREATE TABLE IF NOT EXISTS candidates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_name  TEXT NOT NULL,
+    last_name   TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    source      TEXT DEFAULT 'hh.kz',
+    stage       TEXT DEFAULT 'Новый',
+    experience  TEXT DEFAULT '—',
+    salary      TEXT DEFAULT '—',
+    email       TEXT DEFAULT '—',
+    phone       TEXT DEFAULT '—',
+    city        TEXT DEFAULT 'Алматы',
+    skills      TEXT DEFAULT '[]',
+    score       INTEGER DEFAULT 75,
+    color       TEXT DEFAULT '#2563EB',
+    created_at  TEXT DEFAULT (datetime('now','localtime')),
+    updated_at  TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    direction    TEXT NOT NULL CHECK(direction IN ('in','out','system')),
+    channel      TEXT DEFAULT 'Email',
+    text         TEXT NOT NULL,
+    created_at   TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    icon         TEXT DEFAULT '📌',
+    title        TEXT NOT NULL,
+    subtitle     TEXT DEFAULT '',
+    created_at   TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS experiences (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    company      TEXT NOT NULL,
+    role         TEXT NOT NULL,
+    date_range   TEXT DEFAULT '',
+    description  TEXT DEFAULT '',
+    sort_order   INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS education (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    school       TEXT NOT NULL,
+    degree       TEXT DEFAULT ''
+  );
+`);
+
+// ─────────────────────────────────────────────
+// SEED demo data if empty
+// ─────────────────────────────────────────────
+function seed() {
+  const cnt = db.prepare('SELECT COUNT(*) as n FROM candidates').get();
+  if (cnt.n > 0) return;
+  console.log('[DB] Seeding demo data…');
+
+  const demo = [
+    { fn:'Айгерим',ln:'Сейткали',  role:'Senior Frontend Developer',source:'hh.kz',   stage:'Интервью',   exp:'5 лет',  salary:'320 000 ₸', email:'aigerim.s@email.kz',  phone:'+7 705 123 45 67',city:'Алматы',     skills:['React','TypeScript','Next.js','Redux','GraphQL','Jest'],                 score:88,color:'#2563EB'},
+    { fn:'Данияр', ln:'Жаксыбеков',role:'Backend Engineer (Go)',     source:'LinkedIn', stage:'Скрининг',   exp:'7 лет',  salary:'400 000 ₸', email:'danzh@gmail.com',      phone:'+7 777 234 56 78',city:'Алматы',     skills:['Go','Kubernetes','Docker','PostgreSQL','Redis','gRPC'],                  score:91,color:'#8B5CF6'},
+    { fn:'Сабина', ln:'Нурланова', role:'Product Manager',          source:'Referral', stage:'Оффер',      exp:'4 года', salary:'350 000 ₸', email:'sabina.n@pm.kz',       phone:'+7 701 345 67 89',city:'Нур-Султан',  skills:['Agile','JIRA','Figma','Analytics','OKR','B2B SaaS'],                    score:85,color:'#10B981'},
+    { fn:'Арман',  ln:'Бекенов',   role:'DevOps / SRE Engineer',    source:'hh.kz',   stage:'Новый',      exp:'3 года', salary:'380 000 ₸', email:'arman.b@devops.kz',    phone:'+7 712 456 78 90',city:'Алматы',     skills:['AWS','Terraform','Jenkins','Linux','Prometheus','Grafana'],             score:79,color:'#F59E0B'},
+    { fn:'Жанна',  ln:'Сарсенова', role:'UX/UI Designer',           source:'Internal', stage:'Тестирование',exp:'6 лет', salary:'280 000 ₸', email:'zhanna.s@design.kz',   phone:'+7 707 567 89 01',city:'Алматы',     skills:['Figma','Sketch','Prototyping','User Research','Design Systems','Motion'],score:94,color:'#06B6D4'},
+    { fn:'Нурлан', ln:'Есенов',    role:'Data Scientist',           source:'LinkedIn', stage:'Отказ',      exp:'5 лет',  salary:'450 000 ₸', email:'nurlan.e@data.kz',     phone:'+7 778 678 90 12',city:'Алматы',     skills:['Python','TensorFlow','SQL','Spark','ML','Statistics'],                   score:72,color:'#EF4444'},
+  ];
+
+  const insC = db.prepare(`INSERT INTO candidates (first_name,last_name,role,source,stage,experience,salary,email,phone,city,skills,score,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insM = db.prepare(`INSERT INTO messages (candidate_id,direction,channel,text) VALUES (?,?,?,?)`);
+  const insH = db.prepare(`INSERT INTO history  (candidate_id,icon,title,subtitle) VALUES (?,?,?,?)`);
+  const insE = db.prepare(`INSERT INTO experiences (candidate_id,company,role,date_range,description,sort_order) VALUES (?,?,?,?,?,?)`);
+  const insEdu=db.prepare(`INSERT INTO education (candidate_id,school,degree) VALUES (?,?,?)`);
+
+  const expData = [
+    [[{c:'Kaspi.kz',r:'Senior Frontend Developer',d:'2021 — наст. (3 г.)',desc:'Разработка ключевых микрофронтендов, система платежей, более 2 млн активных пользователей.'},{c:'Kolesa Group',r:'Middle Frontend Developer',d:'2019 — 2021 (2 г.)',desc:'Интерфейс marketplace автомобилей, SEO-оптимизация, performance.'}],{s:'КазНТУ им. Сатпаева',d:'Информатика и ВТ, Бакалавр, 2019'}],
+    [[{c:'Kolesa Group',r:'Lead Backend Engineer',d:'2020 — наст. (4 г.)',desc:'Архитектура высоконагруженных сервисов, переход с монолита на микросервисы.'},{c:'Choco.kz',r:'Backend Developer',d:'2017 — 2020 (3 г.)',desc:'API разработка, интеграция платёжных систем.'}],{s:'КазНУ им. Аль-Фараби',d:'Компьютерные науки, Магистр, 2017'}],
+    [[{c:'Forte Bank',r:'Senior Product Manager',d:'2022 — наст. (2 г.)',desc:'Продуктовая стратегия мобильного банкинга, рост MAU на 40%.'},{c:'Kaspi.kz',r:'Product Manager',d:'2020 — 2022 (2 г.)',desc:'E-commerce и marketplace направление.'}],{s:'Назарбаев Университет',d:'MBA, Управление бизнесом, 2020'}],
+    [[{c:'Beeline Kazakhstan',r:'DevOps Engineer',d:'2021 — наст. (3 г.)',desc:'CI/CD pipelines, infrastructure as code, AWS cloud migrations.'}],{s:'КазНТУ',d:'Инженерия ПО, Бакалавр, 2021'}],
+    [[{c:'Air Astana Digital',r:'Lead UX Designer',d:'2022 — наст. (2 г.)',desc:'Редизайн мобильного приложения 1.2M пользователей, дизайн-система.'},{c:'Choco.kz',r:'Product Designer',d:'2018 — 2022 (4 г.)',desc:'Проектирование marketplace, A/B-тесты, исследования.'}],{s:'КИМЭП',d:'Медиа и коммуникации, Бакалавр, 2018'}],
+    [[{c:'Halyk Bank',r:'Data Scientist',d:'2019 — наст. (5 г.)',desc:'ML-модели для скоринга кредитного риска.'}],{s:'КазНУ',d:'Математика и статистика, Магистр, 2019'}],
+  ];
+
+  const msgData = [
+    [{dir:'in', text:'Добрый день! Увидела вашу вакансию на hh.kz — очень заинтересована.'},{dir:'out',text:'Здравствуйте, Айгерим! Рады отклику. 5 лет React/TS — это серьёзно.'},{dir:'sys',text:'Статус изменён: Новый → Скрининг'},{dir:'out',text:'Предлагаю техническое интервью в среду 3 мая в 14:00 через Google Meet. Удобно?'},{dir:'in', text:'Да, среда подходит. Это около 1.5 часов?'},{dir:'out',text:'Верно. Отправлю ссылку за день до интервью.'},{dir:'sys',text:'Статус изменён: Скрининг → Интервью'}],
+    [{dir:'in', text:'Здравствуйте, откликнулся на вакансию Backend Engineer через LinkedIn.'},{dir:'out',text:'Привет, Данияр! Расскажите о последнем проекте с Kubernetes?'},{dir:'sys',text:'Статус: Скрининг'},{dir:'in', text:'Сейчас в Kolesa Group — архитектура высоконагруженных сервисов, до 500к RPS.'}],
+    [{dir:'sys',text:'Реферал от Ивана Петрова'},{dir:'out',text:'Сабина, рады предложить вам оффер на позицию Product Manager!'},{dir:'in', text:'Большое спасибо! Мне нужен день, чтобы обдумать.'},{dir:'sys',text:'Оффер ожидает ответа'}],
+    [{dir:'sys',text:'Кандидат добавлен с hh.kz, ожидает скрининга'}],
+    [{dir:'out',text:'Жанна, приглашаем вас на тестовое задание. Срок — 3 дня.'},{dir:'sys',text:'Тестовое задание отправлено'},{dir:'in', text:'Поняла, приступаю! Можно уточнить целевую аудиторию?'},{dir:'out',text:'B2C, 25-40 лет, активные пользователи смартфонов.'}],
+    [{dir:'out',text:'К сожалению, мы приняли решение не продолжать процесс. Спасибо!'},{dir:'sys',text:'Статус: Отказ'}],
+  ];
+
+  const histData = [
+    [{i:'📥',t:'Импорт с hh.kz',s:'Профиль автоматически добавлен'},{i:'📧',t:'Отправлено письмо',s:'Приветственное письмо'},{i:'🔄',t:'Этап: Скрининг',s:'Статус изменён после звонка'},{i:'📅',t:'Назначено интервью',s:'3 мая, 14:00 — Google Meet'},{i:'🔄',t:'Этап: Интервью',s:''}],
+    [{i:'🔗',t:'Импорт с LinkedIn',s:''},{i:'📧',t:'Отправлено приглашение',s:'LinkedIn InMail'},{i:'🔄',t:'Этап: Скрининг',s:''}],
+    [{i:'🤝',t:'Реферал от сотрудника',s:'Рекомендован Иваном Петровым'},{i:'🔄',t:'Этап: Интервью',s:''},{i:'🔄',t:'Этап: Тестирование',s:'Тест выполнен на отлично'},{i:'🎉',t:'Этап: Оффер',s:'Оффер отправлен'}],
+    [{i:'📥',t:'Импорт с hh.kz',s:'Новый отклик'}],
+    [{i:'🏢',t:'Внутренний кандидат',s:'Рекомендован HR-директором'},{i:'🔄',t:'Этап: Интервью',s:'Успешно прошла портфолио-ревью'},{i:'📝',t:'Тестовое задание',s:'Задание выдано'}],
+    [{i:'🔗',t:'Импорт с LinkedIn',s:''},{i:'❌',t:'Отказ',s:'Не прошёл техническое интервью'}],
+  ];
+
+  demo.forEach((d, idx) => {
+    const res = insC.run(d.fn,d.ln,d.role,d.source,d.stage,d.exp,d.salary,d.email,d.phone,d.city,JSON.stringify(d.skills),d.score,d.color);
+    const cid = res.lastInsertRowid;
+    msgData[idx].forEach(m => insM.run(cid, m.dir==='sys'?'system':m.dir==='in'?'in':'out', 'Email', m.text));
+    histData[idx].forEach(h => insH.run(cid, h.i, h.t, h.s));
+    const [exps, edu] = expData[idx];
+    exps.forEach((e,i) => insE.run(cid,e.c,e.r,e.d,e.desc,i));
+    if (edu) insEdu.run(cid, edu.s, edu.d);
+  });
+
+  console.log('[DB] Demo data inserted');
+}
+
+seed();
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function json(res, data, status=200) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, { 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', c => { data += c; if (data.length > 1e6) req.destroy(); });
+    req.on('end', () => { try { resolve(JSON.parse(data||'{}')); } catch { resolve({}); } });
+    req.on('error', reject);
+  });
+}
+
+function serveStatic(res, filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mime = { '.html':'text/html;charset=utf-8', '.js':'application/javascript', '.css':'text/css', '.json':'application/json', '.ico':'image/x-icon', '.png':'image/png', '.svg':'image/svg+xml' };
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404); res.end('Not found'); return; }
+    res.writeHead(200, { 'Content-Type': mime[ext] || 'text/plain' });
+    res.end(data);
+  });
+}
+
+// ─────────────────────────────────────────────
+// ROUTER
+// ─────────────────────────────────────────────
+const routes = [];
+function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
+
+function matchRoute(method, pathname) {
+  for (const r of routes) {
+    if (r.method !== method && r.method !== 'ALL') continue;
+    const keys = [];
+    const regex = new RegExp('^' + r.pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$');
+    const m = pathname.match(regex);
+    if (m) { const params={}; keys.forEach((k,i)=>params[k]=decodeURIComponent(m[i+1])); return { handler:r.handler, params }; }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────
+// API ROUTES
+// ─────────────────────────────────────────────
+
+// GET /api/candidates
+route('GET', '/api/candidates', (req, res) => {
+  const q = req.query.q || '';
+  const stage = req.query.stage || '';
+  let sql = 'SELECT * FROM candidates WHERE 1=1';
+  const args = [];
+  if (q) { sql += ` AND (first_name||' '||last_name||' '||role) LIKE ?`; args.push(`%${q}%`); }
+  if (stage && stage !== 'Все') { sql += ' AND stage = ?'; args.push(stage); }
+  sql += ' ORDER BY created_at DESC';
+  const rows = db.prepare(sql).all(...args).map(hydrate);
+  json(res, rows);
+});
+
+// GET /api/candidates/:id
+route('GET', '/api/candidates/:id', (req, res, params) => {
+  const c = db.prepare('SELECT * FROM candidates WHERE id=?').get(params.id);
+  if (!c) return json(res, {error:'Not found'}, 404);
+  json(res, hydrate(c));
+});
+
+// POST /api/candidates
+route('POST', '/api/candidates', async (req, res) => {
+  const b = await readBody(req);
+  if (!b.first_name || !b.last_name || !b.role) return json(res,{error:'first_name, last_name, role required'},400);
+  const colors = ['#2563EB','#8B5CF6','#10B981','#F59E0B','#EF4444','#06B6D4','#EC4899'];
+  const color = b.color || colors[Math.floor(Math.random()*colors.length)];
+  const r = db.prepare(`INSERT INTO candidates (first_name,last_name,role,source,stage,experience,salary,email,phone,city,skills,score,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(b.first_name,b.last_name,b.role,b.source||'hh.kz','Новый',b.experience||'—',b.salary||'—',b.email||'—',b.phone||'—',b.city||'Алматы',JSON.stringify(b.skills||[]),b.score||75,color);
+  const cid = r.lastInsertRowid;
+  db.prepare(`INSERT INTO history (candidate_id,icon,title,subtitle) VALUES (?,?,?,?)`).run(cid,'📥','Кандидат добавлен','Добавлен вручную');
+  db.prepare(`INSERT INTO messages (candidate_id,direction,channel,text) VALUES (?,?,?,?)`).run(cid,'system','System','Кандидат создан');
+  json(res, hydrate(db.prepare('SELECT * FROM candidates WHERE id=?').get(cid)), 201);
+});
+
+// PATCH /api/candidates/:id
+route('PATCH', '/api/candidates/:id', async (req, res, params) => {
+  const b = await readBody(req);
+  const c = db.prepare('SELECT * FROM candidates WHERE id=?').get(params.id);
+  if (!c) return json(res, {error:'Not found'}, 404);
+  const allowed = ['first_name','last_name','role','source','stage','experience','salary','email','phone','city','skills','score','color'];
+  const sets = []; const args = [];
+  for (const k of allowed) {
+    if (b[k] !== undefined) {
+      sets.push(`${k}=?`);
+      args.push(k==='skills' ? JSON.stringify(b[k]) : b[k]);
+    }
+  }
+  if (!sets.length) return json(res,{error:'Nothing to update'},400);
+  sets.push(`updated_at=datetime('now','localtime')`);
+  db.prepare(`UPDATE candidates SET ${sets.join(',')} WHERE id=?`).run(...args, params.id);
+  // log stage change
+  if (b.stage && b.stage !== c.stage) {
+    db.prepare(`INSERT INTO history (candidate_id,icon,title,subtitle) VALUES (?,?,?,?)`).run(params.id,'🔄',`Этап: ${b.stage}`,`Изменён с ${c.stage}`);
+    db.prepare(`INSERT INTO messages (candidate_id,direction,channel,text) VALUES (?,?,?,?)`).run(params.id,'system','System',`Статус изменён: ${c.stage} → ${b.stage}`);
+  }
+  json(res, hydrate(db.prepare('SELECT * FROM candidates WHERE id=?').get(params.id)));
+});
+
+// DELETE /api/candidates/:id
+route('DELETE', '/api/candidates/:id', (req, res, params) => {
+  const c = db.prepare('SELECT id FROM candidates WHERE id=?').get(params.id);
+  if (!c) return json(res,{error:'Not found'},404);
+  db.prepare('DELETE FROM candidates WHERE id=?').run(params.id);
+  json(res,{success:true});
+});
+
+// GET /api/candidates/:id/messages
+route('GET', '/api/candidates/:id/messages', (req, res, params) => {
+  const rows = db.prepare('SELECT * FROM messages WHERE candidate_id=? ORDER BY id ASC').all(params.id);
+  json(res, rows);
+});
+
+// POST /api/candidates/:id/messages
+route('POST', '/api/candidates/:id/messages', async (req, res, params) => {
+  const b = await readBody(req);
+  if (!b.text) return json(res,{error:'text required'},400);
+  const dir = b.direction || 'out';
+  const r = db.prepare(`INSERT INTO messages (candidate_id,direction,channel,text) VALUES (?,?,?,?)`).run(params.id, dir, b.channel||'Email', b.text);
+  json(res, db.prepare('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid), 201);
+});
+
+// GET /api/candidates/:id/history
+route('GET', '/api/candidates/:id/history', (req, res, params) => {
+  json(res, db.prepare('SELECT * FROM history WHERE candidate_id=? ORDER BY id ASC').all(params.id));
+});
+
+// GET /api/candidates/:id/resume
+route('GET', '/api/candidates/:id/resume', (req, res, params) => {
+  const exp = db.prepare('SELECT * FROM experiences WHERE candidate_id=? ORDER BY sort_order').all(params.id);
+  const edu = db.prepare('SELECT * FROM education WHERE candidate_id=?').all(params.id);
+  json(res, { experiences: exp, education: edu });
+});
+
+// GET /api/analytics
+route('GET', '/api/analytics', (req, res) => {
+  const total   = db.prepare('SELECT COUNT(*) as n FROM candidates').get().n;
+  const active  = db.prepare("SELECT COUNT(*) as n FROM candidates WHERE stage != 'Отказ'").get().n;
+  const offers  = db.prepare("SELECT COUNT(*) as n FROM candidates WHERE stage = 'Оффер'").get().n;
+  const byStage = db.prepare("SELECT stage, COUNT(*) as n FROM candidates GROUP BY stage").all();
+  const bySrc   = db.prepare("SELECT source, COUNT(*) as n FROM candidates GROUP BY source ORDER BY n DESC").all();
+  json(res, { total, active, offers, conversion: total ? Math.round(offers/total*100) : 0, byStage, bySrc });
+});
+
+// GET /api/integrations
+route('GET', '/api/integrations', (req, res) => {
+  json(res, [
+    {id:'hh_kz',   name:'hh.kz',        connected:true,  candidates:47, lastSync:'сегодня 09:42'},
+    {id:'linkedin', name:'LinkedIn',     connected:true,  candidates:23, lastSync:'вчера'},
+    {id:'hh_ru',   name:'hh.ru',        connected:false, candidates:0,  lastSync:null},
+    {id:'superjob',name:'Superjob.kz',   connected:false, candidates:0,  lastSync:null},
+    {id:'telegram', name:'Telegram Bot', connected:false, candidates:0,  lastSync:null},
+    {id:'whatsapp', name:'WhatsApp API', connected:false, candidates:0,  lastSync:null},
+  ]);
+});
+
+// POST /api/integrations/:id/sync
+route('POST', '/api/integrations/:id/sync', (req, res, params) => {
+  json(res, { success:true, message:`Синхронизация ${params.id} запущена`, synced_at: new Date().toISOString() });
+});
+
+// ─────────────────────────────────────────────
+// HYDRATE row
+// ─────────────────────────────────────────────
+function hydrate(c) {
+  return { ...c, skills: safeJSON(c.skills, []) };
+}
+function safeJSON(str, fallback) {
+  try { return JSON.parse(str); } catch { return fallback; }
+}
+
+// ─────────────────────────────────────────────
+// HTTP SERVER
+// ─────────────────────────────────────────────
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  req.query = parsed.query;
+
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,PATCH,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type' });
+    return res.end();
+  }
+
+  // API
+  if (pathname.startsWith('/api/')) {
+    const match = matchRoute(req.method, pathname);
+    if (match) {
+      try { await match.handler(req, res, match.params); }
+      catch(e) { console.error(e); json(res,{error:e.message},500); }
+    } else {
+      json(res, {error:`No route: ${req.method} ${pathname}`}, 404);
+    }
+    return;
+  }
+
+  // Static files
+  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
+  // Security: prevent path traversal
+  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
+  serveStatic(res, filePath);
+});
+
+server.listen(PORT, () => {
+  console.log(`\n  ╔══════════════════════════════════════╗`);
+  console.log(`  ║   TalentFlow CRM — Backend Ready     ║`);
+  console.log(`  ╠══════════════════════════════════════╣`);
+  console.log(`  ║  http://localhost:${PORT}               ║`);
+  console.log(`  ║  DB: crm.db (SQLite)                 ║`);
+  console.log(`  ╚══════════════════════════════════════╝\n`);
+});
