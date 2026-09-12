@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: hr-housing-web
+    runtime: node
+    plan: starter
+    rootDir: web
+    buildCommand: "true"
+    startCommand: "node server.js"
+    autoDeploy: true
+    disk:
+      name: hr-housing-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /var/data/rental.db
+      - key: UPLOADS_PATH
+        value: /var/data/uploads
