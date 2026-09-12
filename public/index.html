@@ -700,7 +700,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--ink);font-size:14p
 
 <script>
 // ── CONFIG ──
-const API = '';  // same-origin: server serves this file too
+// In the browser the app is served by server.js itself, so relative paths
+// work as-is. Packaged as a native Android app (Capacitor), the WebView has
+// no backend of its own — ask once for the deployed server's URL and reuse it.
+const API = (() => {
+  try {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+      let base = localStorage.getItem('apiBase');
+      if (base === null) {
+        base = window.prompt('Адрес сервера TalentFlow CRM (например, http://192.168.1.10:3000):', '') || '';
+        localStorage.setItem('apiBase', base);
+      }
+      return base;
+    }
+  } catch (e) {}
+  return '';
+})();
 
 // ── DATA ──
 const STAGES = ['Новый','Скрининг','Интервью','Тестирование','Оффер'];

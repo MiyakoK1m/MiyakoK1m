@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TalentFlow CRM</string>
+    <string name="title_activity_main">TalentFlow CRM</string>
+    <string name="package_name">com.talentflow.crm</string>
+    <string name="custom_url_scheme">com.talentflow.crm</string>
+</resources>
