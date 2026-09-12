@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: hr-housing-web
+    runtime: node
+    plan: free
+    rootDir: web
+    buildCommand: "true"
+    startCommand: "node server.js"
+    autoDeploy: true
+    envVars:
+      # Both optional: leave unset to run without persistence (fine only for trying things out —
+      # the free plan's disk doesn't survive restarts). Set both to back the database up to a
+      # Google Drive folder instead, so data survives Render's free-tier restarts/sleep cycles
+      # without needing a paid disk. See web/README.md for how to create them.
+      - key: GDRIVE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GDRIVE_FOLDER_ID
+        sync: false

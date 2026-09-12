@@ -1,0 +1,14 @@
+{
+  "name": "hr-housing-web",
+  "version": "1.0.0",
+  "description": "Заселение и аренда — web companion (REST API + browser UI) for the Android app",
+  "private": true,
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "UNLICENSED"
+}

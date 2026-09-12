@@ -1,0 +1,5 @@
+node_modules/
+rental.db
+rental.db-shm
+rental.db-wal
+uploads/
