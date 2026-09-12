@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const url = require('node:url');
 const { DatabaseSync } = require('node:sqlite');
+const { DriveSync } = require('./drive');
 
 const PORT = process.env.PORT || 3000;
 const DB_FILE = process.env.DB_PATH || path.join(__dirname, 'rental.db');
@@ -23,37 +24,76 @@ const UPLOADS_DIR = process.env.UPLOADS_PATH || path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // ─────────────────────────────────────────────
-// DATABASE
+// GOOGLE DRIVE PERSISTENCE (optional — see web/README.md)
 // ─────────────────────────────────────────────
-fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
-const db = new DatabaseSync(DB_FILE);
+const driveSync = new DriveSync({
+  serviceAccountJson: process.env.GDRIVE_SERVICE_ACCOUNT_JSON,
+  folderId: process.env.GDRIVE_FOLDER_ID,
+  fileName: process.env.GDRIVE_BACKUP_FILENAME,
+});
 
-db.exec('PRAGMA journal_mode=WAL;');
-
-const JSON_TABLES = ['trip_entries', 'rental_records', 'landlords', 'residents', 'cities', 'finance_registry'];
-for (const table of JSON_TABLES) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ${table} (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      json TEXT NOT NULL,
-      updated_at INTEGER DEFAULT (unixepoch('now') * 1000)
-    );
-  `);
+let backupTimer = null;
+function scheduleBackup() {
+  if (!driveSync.enabled) return;
+  if (backupTimer) clearTimeout(backupTimer);
+  backupTimer = setTimeout(async () => {
+    try {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); // fold the WAL into rental.db so the uploaded snapshot is complete
+      const ok = await driveSync.uploadFrom(DB_FILE);
+      console.log(ok ? '[DriveSync] Backup uploaded' : '[DriveSync] Backup upload failed (see above)');
+    } catch (e) {
+      console.error('[DriveSync] scheduled backup failed:', e.message);
+    }
+  }, 8000); // coalesce bursts of writes into one upload, 8s after the last one
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS shared_fields (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    json TEXT NOT NULL
-  );
-`);
+// ─────────────────────────────────────────────
+// DATABASE
+// ─────────────────────────────────────────────
+// `db` is opened by bootstrapDatabase() below (it may first need to await a Drive restore,
+// and top-level await isn't available in a CommonJS file) — declared here so every function
+// in this file that closes over `db` sees the same binding once it's assigned.
+let db;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS templates (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
+const JSON_TABLES = ['trip_entries', 'rental_records', 'landlords', 'residents', 'cities', 'finance_registry'];
+
+async function bootstrapDatabase() {
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+
+  if (driveSync.enabled && !fs.existsSync(DB_FILE)) {
+    console.log('[DriveSync] Restoring rental.db from Google Drive before opening it…');
+    await driveSync.downloadTo(DB_FILE);
+  }
+
+  db = new DatabaseSync(DB_FILE);
+  db.exec('PRAGMA journal_mode=WAL;');
+
+  for (const table of JSON_TABLES) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ${table} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        json TEXT NOT NULL,
+        updated_at INTEGER DEFAULT (unixepoch('now') * 1000)
+      );
+    `);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shared_fields (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      json TEXT NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS templates (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  seed();
+}
 
 const DEFAULT_CITIES = [
   'Астана', 'Алматы', 'Шымкент', 'Караганда', 'Актобе', 'Атырау',
@@ -139,8 +179,6 @@ function defaultSharedFields() {
     deposit: 0,
   };
 }
-
-seed();
 
 // ─────────────────────────────────────────────
 // GENERIC JSON-TABLE CRUD
@@ -290,6 +328,8 @@ const server = http.createServer(async (req, res) => {
     const resource = segments[1];
     const idSegment = segments[2];
 
+    if (req.method !== 'GET') scheduleBackup();
+
     // ---- generic JSON-table resources ----
     if (resource && TABLE_ROUTES[resource]) {
       const table = TABLE_ROUTES[resource];
@@ -384,7 +424,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[Заселение и аренда] Server listening on http://localhost:${PORT}`);
-  console.log(`[DB] ${DB_FILE}`);
-});
+bootstrapDatabase()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`[Заселение и аренда] Server listening on http://localhost:${PORT}`);
+      console.log(`[DB] ${DB_FILE}`);
+      console.log(`[DriveSync] ${driveSync.enabled ? 'enabled' : 'disabled (no GDRIVE_* env vars set)'}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Fatal: failed to initialize the database', err);
+    process.exit(1);
+  });
