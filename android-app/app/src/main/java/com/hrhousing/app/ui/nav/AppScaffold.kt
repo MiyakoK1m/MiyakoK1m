@@ -39,6 +39,7 @@ import com.hrhousing.app.ui.screens.finance.FinanceApprovalScreen
 import com.hrhousing.app.ui.screens.landlords.LandlordsScreen
 import com.hrhousing.app.ui.screens.rentalinfo.RentalInfoTableScreen
 import com.hrhousing.app.ui.screens.residents.ResidentsScreen
+import com.hrhousing.app.ui.screens.settings.SettingsScreen
 import com.hrhousing.app.ui.screens.trip.TripInputScreen
 import kotlinx.coroutines.launch
 
@@ -116,6 +117,7 @@ fun AppScaffold(container: AppContainer) {
                 composable(Screen.Landlords.route) { LandlordsScreen(container) }
                 composable(Screen.Residents.route) { ResidentsScreen(container) }
                 composable(Screen.Cities.route) { CitiesScreen(container) }
+                composable(Screen.Settings.route) { SettingsScreen(container) }
             }
         }
     }

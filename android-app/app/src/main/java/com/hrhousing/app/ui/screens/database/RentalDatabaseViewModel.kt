@@ -105,12 +105,7 @@ class RentalDatabaseViewModel(private val container: AppContainer) : ViewModel()
 
     fun deleteAllData() {
         viewModelScope.launch {
-            container.tripEntryRepository.clear()
-            container.rentalRecordRepository.clear()
-            container.financeRegistryRepository.clear()
-            container.landlordRepository.clear()
-            container.residentEmployeeRepository.clear()
-            container.cityRepository.resetToDefault()
+            container.deleteAllData()
             _draft.value = freshDraft()
             _statusMessage.value = "Все данные удалены"
         }

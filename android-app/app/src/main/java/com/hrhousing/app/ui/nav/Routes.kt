@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.TableView
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -26,4 +27,5 @@ enum class Screen(val route: String, val title: String, val icon: ImageVector) {
     Landlords("landlords", "Арендодатели", Icons.Filled.Apartment),
     Residents("residents", "Проживающие сотрудники", Icons.Filled.People),
     Cities("cities", "Города", Icons.Filled.LocationCity),
+    Settings("settings", "Настройки", Icons.Filled.Settings),
 }

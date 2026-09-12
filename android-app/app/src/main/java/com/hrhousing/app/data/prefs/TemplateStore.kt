@@ -1,11 +1,10 @@
 package com.hrhousing.app.data.prefs
 
+import com.hrhousing.app.data.net.ApiClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 object DefaultTemplates {
@@ -63,18 +62,45 @@ Wi-Fi: {wifi_имя}
 Комментарий: {комментарий}"""
 }
 
-enum class TemplateKey(val prefKey: String, val default: String) {
-    CHECKIN("template_checkin", DefaultTemplates.CHECKIN),
-    BOOKING("template_booking", DefaultTemplates.BOOKING),
-    FINANCE_OBJECT("template_finance_object", DefaultTemplates.FINANCE_OBJECT),
+enum class TemplateKey(val prefKey: String, val serverKey: String, val default: String) {
+    CHECKIN("template_checkin", "CHECKIN", DefaultTemplates.CHECKIN),
+    BOOKING("template_booking", "BOOKING", DefaultTemplates.BOOKING),
+    FINANCE_OBJECT("template_finance_object", "FINANCE_OBJECT", DefaultTemplates.FINANCE_OBJECT),
 }
 
 /** Holds the user-editable text templates used by the "Заселение"/"Бронирование"/"Финансы" generators. */
-class TemplateStore(private val jsonPrefStore: JsonPrefStore, scope: CoroutineScope) {
-    private val flows: Map<TemplateKey, StateFlow<String>> = TemplateKey.values().associateWith { key ->
-        jsonPrefStore.observeRaw(key.prefKey)
-            .map { it ?: key.default }
-            .stateIn(scope, SharingStarted.Eagerly, key.default)
+class TemplateStore(
+    private val jsonPrefStore: JsonPrefStore,
+    private val serverSettings: ServerSettings,
+    private val scope: CoroutineScope,
+) {
+    private val flows: Map<TemplateKey, MutableStateFlow<String>> = TemplateKey.values().associateWith { key ->
+        MutableStateFlow(key.default)
+    }
+
+    init {
+        for (key in TemplateKey.values()) {
+            scope.launch {
+                jsonPrefStore.observeRaw(key.prefKey).collectLatest { stored ->
+                    flows.getValue(key).value = stored ?: key.default
+                }
+            }
+        }
+        scope.launch { refresh() }
+    }
+
+    private fun base(): String? = serverSettings.baseUrl.value.ifBlank { null }
+
+    suspend fun refresh() {
+        val url = base() ?: return
+        val remote = runCatching { ApiClient.getObject(url, "/api/templates") }.getOrNull() ?: return
+        for (key in TemplateKey.values()) {
+            val value = remote.optString(key.serverKey, "")
+            if (value.isNotBlank()) {
+                flows.getValue(key).value = value
+                jsonPrefStore.writeRaw(key.prefKey, value)
+            }
+        }
     }
 
     fun observe(key: TemplateKey): StateFlow<String> = flows.getValue(key)
@@ -82,6 +108,11 @@ class TemplateStore(private val jsonPrefStore: JsonPrefStore, scope: CoroutineSc
     fun current(key: TemplateKey): String = flows.getValue(key).value.ifBlank { key.default }
 
     fun update(scope: CoroutineScope, key: TemplateKey, value: String) {
-        scope.launch { jsonPrefStore.writeRaw(key.prefKey, value) }
+        flows.getValue(key).value = value
+        scope.launch {
+            jsonPrefStore.writeRaw(key.prefKey, value)
+            val url = base() ?: return@launch
+            runCatching { ApiClient.putObject(url, "/api/templates/${key.serverKey}", org.json.JSONObject().put("value", value)) }
+        }
     }
 }
